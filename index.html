@@ -1,27 +1,329 @@
 <html>
-  <head>
-    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
-    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css" integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm" crossorigin="anonymous">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js" integrity="sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q" crossorigin="anonymous"></script>
-    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js" integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl" crossorigin="anonymous"></script>
-   <script>
-let pdfdownload = ()=>{
-  const request = new XMLHttpRequest();
-  request.responseType = "blob";
-  request.open("GET","https://yutampp.github.io/n1100000.pdf");
-  request.send();
-  request.onload = function(data){
-    document.body.innerHTML(this.responseType);
-    console.log(data,this);
-    const a = document.createElement("a");
-    a.download = "pdf";
-    a.href = URL.createObjectURL(this.response);
-    a.click();
-  };
+<style>
+input {
+  display: block;
 }
-    </script>
-  </head>
-  <body>
-    <button onclick="pdfdownload()">test123123</button>
-  </body>
+</style>
+<body>
+<div id=control><button id="test">test</button></div>
+<div id=control><button id="update">update</button></div>
+<div id=control><button id="play">play</button></div>
+<input id="position" type="range" value="1" min="0" max="100" step="1">
+<input id="fft_size" type="range" value="2000" min="0" max="4000" step="1">
+<input id="shift_size" type="range" value="50" min="1" max="100" step="1">
+<div id="container">
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</body>
+
+<script>
+addEventListener("load",async e=>{
+  console.log("load");
+});
+
+document.querySelector("#test").addEventListener("click",async e=>{
+  //audio.rec_start();
+  //await sleep(3000);
+  //const audio_buffer = await audio.rec_stop();
+  const audio_buffer = await audio.get_voice();
+  const view = audio_buffer.getChannelData(0);
+  console.log(audio_buffer,view);
+
+ 
+  document.querySelector("#fft_size").addEventListener("input", function(){
+    render();
+  });
+  document.querySelector("#position").addEventListener("input", function(){
+    render();
+  });
+  document.querySelector("#shift_size").addEventListener("input", function(){
+    render();
+  });
+  document.querySelector("#update").addEventListener("click", function(){
+    render();
+  });
+  const render = ()=>{
+    const position = document.querySelector("#position").value/100;
+    const fft_size = parseInt(document.querySelector("#fft_size").value);
+    const shift_size = parseInt(document.querySelector("#shift_size").value)/50
+    console.log(position,fft_size,shift_size)
+    const start = view.length * position;
+    document.querySelector("#container").innerHTML="";
+    const input = view.slice(start,start + fft_size);
+    const data1 = dft(input );
+    //high_shift(data1, shift_size);
+    const data2 = reverse_dft(data1, fft_size);
+    create_chart(data2,document.querySelector("#container") );
+    create_chart(view.filter((v,i,self)=>i%(Math.floor(self.length/500))==0),document.querySelector("#container") );
+    create_chart(data1,document.querySelector("#container") );
+    //console.log(data2);
+    const audio_node = audio.create_node(data2);
+    document.querySelector("#play").onclick = async function(){
+      const array = view.reduce((acc,v,i,self)=>{
+        const chank = self.slice(i,i + fft_size);
+        if(chank.length == fft_size ) acc.push(chank);
+        return acc
+      },[]).filter((v,i,self)=>i%(Math.floor(self.length/500))==0);
+      console.log(view);
+      const result1 = dftx(view).map((v,i,self)=>{
+        const length = self[self.length-1].length;
+        return new Array(length).fill(0).map((zero,i)=>v[Math.floor(v.length*i/length)])
+      });
+      const graph_data = result1.map(v=>v.map(v=>Math.abs(v[0])+Math.abs(v[1]) ) ).reverse();
+      console.log(graph_data)
+      const spectrograph = get_spectrograph(graph_data);
+      document.querySelector("#container").appendChild(spectrograph);
+      //const result1 = array.map(input=>dft(input).map(v=>Math.abs(v[0])+Math.abs(v[1])) );
+      //const result1 = array.map((input,i)=>dft(input).map(v=>i) );
+      //console.log(result1)
+      //const spectrograph = get_spectrograph(result1);
+      //document.querySelector("#container").appendChild(spectrograph);
+      //result1.forEach(data=>high_shift(data,shift_size) );
+      //const result2 = result1.map(result=>reverse_dft(result,fft_size)).flat();
+      //const audio_node_all_section = audio.create_node(result2);
+      //audio_node_all_section.loop = true;
+      //audio.play(audio_node_all_section);
+    };
+  };
+});
+
+function sleep(t){
+  t = t || 0;
+  return new Promise(resolve=>{
+    setTimeout(()=>{
+      resolve();
+    },t);
+  })
+}
+
+const audio = {
+  filename : "voice2.wav",
+  context: new AudioContext(),
+  recorder: null,
+  resolve: null,
+  async rec_start(){
+    const mime = "audio/webm";
+    const stream = await navigator.mediaDevices.getUserMedia(
+                   { audio: true, video:false });
+    const recorder = new MediaRecorder(stream,
+                    { mimeType: mime });
+    recorder.start();
+    this.recorder = recorder;
+  },
+  rec_stop(){
+    return new Promise(resolve=>{
+      this.recorder.addEventListener("dataavailable",async (e)=>{
+        rec_blob = e.data;
+        rec_audio_buffer = await rec_blob.arrayBuffer();
+        const context = new AudioContext();
+        const audio_buffer = await context.decodeAudioData(rec_audio_buffer);
+        //const audio_buffer_view = audio_buffer.getChannelData(0);
+        resolve(audio_buffer);
+      });
+      this.recorder.stop();
+    });
+  },
+  async get_voice(){
+    const response = await fetch(this.filename);
+    const arraybuffer = await response.arrayBuffer();
+    const context = new AudioContext();
+    const audio_buffer = await context.decodeAudioData(arraybuffer);
+    return audio_buffer
+  },
+  create_node(data){
+    const option = {
+      length: data.length,
+      sampleRate:44000,
+    }
+    const audio_buffer = new AudioBuffer(option);
+    const view = audio_buffer.getChannelData(0);
+    data.forEach((v,i)=>view[i]=v);
+    return new AudioBufferSourceNode(this.context,{buffer: audio_buffer});
+  },
+  play(audio_node){
+    if(this.stop_audio_node) stop(this.stop_audio_node);
+    this.stop_audio_node = audio_node;
+    audio_node.connect(this.context.destination);
+    audio_node.start();
+  },
+  stop_audio_node:null,
+  stop(audio_node){
+    audio_node.stop();
+  },
+};
+
+function get_spectrograph(data_array){
+  //const max = data_array.flat().reduce((acc,v)=>acc<v?v:acc);
+  const max = data_array.reduce((acc, array)=>{
+    const temp_max = array.reduce((acc,v)=>acc<v?v:acc);
+    return temp_max > acc ? temp_max : acc
+  },0);
+  //const min = data_array.flat().reduce((acc,v)=>acc>v?v:acc);
+  const min = data_array.reduce((acc, array)=>{
+    const temp_min = array.reduce((acc,v)=>acc>v?v:acc);
+    return temp_min < acc ? temp_min : acc
+  },100)
+  const base = 0-min;
+  const gain = 1/(max+base);
+  console.log(max,min,base,gain);
+  const canvas = document.createElement("canvas");
+  const y_max = data_array.length;
+  const x_max = data_array[0].length;
+  canvas.width = x_max;
+  canvas.height = y_max;
+  const context = canvas.getContext("2d");
+  console.log(data_array);
+  const imageData = context.createImageData(canvas.width,canvas.height);
+  const print_dot = function(x,y,value){
+    const index = (x + y * imageData.width) * 4;
+    value = (base+value)*gain;
+    value = (value * 2) -1;
+    const GAIN = 5;
+    const color = {
+      R: sigmoid( value, GAIN, -0.2),
+      B: 1 - sigmoid( value, GAIN, 0.2),
+      G: sigmoid( value, GAIN, 0.6) + (1 - sigmoid( value, GAIN, -0.6) ) -1 ,
+      A: 1,
+    };
+    imageData.data[index + 0] = color.R*255;
+    imageData.data[index + 1] = color.G*255;
+    imageData.data[index + 2] = color.B*255;
+    imageData.data[index + 3] = color.A*255;
+  }
+  data_array.forEach((X,y)=>X.forEach((v,x)=>{
+    print_dot(x,y,v);
+  }));
+  context.putImageData(imageData, 0, 0);
+  return canvas
+}
+
+
+function create_chart(data_,target_element) {
+  const container = target_element;
+  const chart = document.createElement("canvas");
+  container.appendChild(chart);
+  const chart_data = {
+    labels: Object.keys(data_),
+    datasets: [{
+      label: 'ee',
+      backgroundColor: 'rgb(255, 99, 132)',
+      borderColor: 'rgb(255, 99, 132)',
+      data: data_,
+    }]
+  };
+  const config = {
+    type: 'line',
+    data: chart_data,
+    options: {
+      animation: {
+        duration:0,
+      },
+      elements: {
+        point: {
+          radius:0
+        }
+      }
+    },
+  };
+  return new Chart(chart,config);
+}
+
+function _dft(a) {
+  const L = (new Array(a.length )).fill(0).map((v,i)=>i)
+  const K = (new Array(Math.floor(a.length/2) ) ).fill(0).map((v,i)=>i);
+  return K.map(k=>{
+    return L.reduce((acc,l)=>{
+      const THETA = 2 * Math.PI/L.length * k * l;
+      return [acc[0] + a[l] * Math.cos( THETA ) * 2 / L.length,
+              acc[1] + a[l] * Math.sin( THETA ) * 2 / L.length]
+    },[0,0]);
+  })
+}
+
+function _dftx(a,n) {
+  const split_array = a.reduce((acc,v,i,self)=>{
+    acc[acc.length-1].push(v);
+    if( acc[acc.length-1].length >= Math.floor(self.length/n) ) acc.push([]);
+    return acc
+  },[[]]);
+  console.log(split_array.length,n);
+  return split_array.map(a=>a.reduce( (acc,v,i) => {
+    const THETA = 2 * Math.PI/a.length * i;
+    return [acc[0] + v * Math.cos( THETA ) * 2 / a.length,
+            acc[1] + v * Math.sin( THETA ) * 2 / a.length]
+  },[0,0]) )
+}
+
+function dftx(a) {
+  const sampling_rate = 44000;
+  const target_min_frequency = 200;
+  const target_max_frequency = target_min_frequency * 2;
+  const frequency_step = (target_max_frequency - target_min_frequency ) / 500;
+  const number_of_split = Math.floor(a.length / sampling_rate * target_max_frequency );
+  console.log(a.length,number_of_split);
+  const i = new Array(Math.floor(number_of_split / frequency_step )).fill(0).map((v,i)=>i*frequency_step)
+            .filter(v=>a.length/v<sampling_rate).filter(v=>target_min_frequency*a.length/sampling_rate<v);
+  console.time("dtfx");	
+  let _number_a_chank = 0;
+  let _temp = 0;
+  const r = i.map(v=> {
+    const number_a_chank = Math.floor(a.length/v);
+    if(true || number_a_chank!==_number_a_chank){
+      _temp = _dftx(a,v);
+      _number_a_chank = number_a_chank;
+      return _temp
+    }
+    return false
+  } ).filter(v=>v);
+  console.timeEnd("dtfx")
+  console.log(r)
+  return r
+}
+function reverse_dftx(a, length){
+
+}
+function dft(a){
+  console.time("dtf");
+  const ab = _dft(a);
+  console.timeEnd("dtf");
+  return ab
+}
+
+function reverse_dft(a, length){
+  const A = a.map(v=>v[0]);
+  const B = a.map(v=>v[1]);
+  const L = (new Array(length)).fill(0).map((v,i)=>i);
+  const N = (new Array(a.length)).fill(0).map((v,i)=>i);
+  return L.map(l => {
+    return N.reduce((acc,n)=>{
+      const THETA = 2 * Math.PI/length * l * n;
+      return acc + A[n] * Math.cos(THETA) + B[n] * Math.sin(THETA)
+    },0)
+  })
+}
+
+function sigmoid(x, gain, offset_x){
+  gain = gain || 1;
+  offset_x = offset_x || 0;
+  return ((Math.tanh(((x+offset_x)*gain)/2)+1)/2)
+}
+
+function high_shift(a,n){
+  const shift_size = n;
+  const fft_size = Math.floor(a.length * shift_size);
+  const temp = new Array(fft_size).fill(0).map((v,i)=>{
+    const o = Math.floor(i/shift_size);
+    return a[o]
+  });
+  if(n < 1) a.fill([]);
+  temp.forEach((v,i)=>{
+    a[i]=v
+  });
+  return a
+}
+
+</script>
 </html>
+
+
+
